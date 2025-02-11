@@ -3,7 +3,7 @@ import cors from "cors";
 
 const PORT = 8080;
 const app = express();
-const database = { data: "Hello World" };
+const database = { data: "Hello World", hash:""  }; // using a hash in the database
 
 app.use(cors());
 app.use(express.json());
@@ -16,9 +16,15 @@ app.get("/", (req, res) => {
 
 app.post("/", (req, res) => {
   database.data = req.body.data;
+  database.hash = req.body?.hash
   res.sendStatus(200);
 });
 
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
+});
+
+app.post('/modify-data', (req, res) => { // Test route
+  database.data = req.body.data;
+  res.sendStatus(200);
 });
