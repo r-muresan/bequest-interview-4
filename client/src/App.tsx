@@ -1,35 +1,83 @@
-import React, { useEffect, useState } from "react";
-
-const API_URL = "http://localhost:8080";
+import React, { useEffect, useState, useCallback } from "react";
+import {
+  fetchPublicKey,
+  fetchData,
+  updateData,
+  tamperData,
+} from "./utils/api.ts";
+import { verifyData } from "./utils/crypto.ts";
+import { storeBackup, getBackup } from "./utils/storage.ts";
 
 function App() {
-  const [data, setData] = useState<string>();
+  const [data, setData] = useState<string>("");
+  const [signature, setSignature] = useState<string>("");
+  const [publicKey, setPublicKey] = useState<string>("");
+  const [message, setMessage] = useState<string>("");
 
   useEffect(() => {
-    getData();
+    const initialize = async () => {
+      const publicKey = await fetchPublicKey();
+      setPublicKey(publicKey);
+
+      const { data, signature } = await fetchData();
+      setData(data);
+      setSignature(signature);
+
+      if (!getBackup()) {
+        storeBackup(data, signature);
+      }
+    };
+
+    initialize();
   }, []);
 
-  const getData = async () => {
-    const response = await fetch(API_URL);
-    const { data } = await response.json();
-    setData(data);
+  const handleUpdateData = useCallback(async () => {
+    storeBackup(data, signature);
+    await updateData(data);
+    const { data: newData, signature: newSignature } = await fetchData();
+    setData(newData);
+    setSignature(newSignature);
+  }, [data, signature]);
+
+  const handleTamperData = async () => {
+    await tamperData(data);
+    const { data: newData, signature: newSignature } = await fetchData();
+    setData(newData);
+    setSignature(newSignature);
+    setMessage("Data tampered successfully. Try verifying it!");
   };
 
-  const updateData = async () => {
-    await fetch(API_URL, {
-      method: "POST",
-      body: JSON.stringify({ data }),
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-    });
+  const handleVerifyData = useCallback(async () => {
+    try {
+      const isVerified = await verifyData(publicKey, data, signature);
+      setMessage(
+        isVerified
+          ? "Data is intact and verified."
+          : "Data has been tampered with!"
+      );
+    } catch (error) {
+      setMessage("Error verifying data.");
+    }
+  }, [publicKey, data, signature]);
 
-    await getData();
-  };
+  const handleRestoreBackup = async () => {
+    const backup = getBackup();
+    if (backup) {
+      const { data: backupData } = backup;
 
-  const verifyData = async () => {
-    throw new Error("Not implemented");
+      await updateData(backupData);
+
+      const { data: newData, signature: newSignature } = await fetchData();
+
+      setData(newData);
+      setSignature(newSignature);
+
+      storeBackup(newData, newSignature);
+
+      setMessage("Data restored from backup.");
+    } else {
+      setMessage("No backup found.");
+    }
   };
 
   return (
@@ -56,13 +104,23 @@ function App() {
       />
 
       <div style={{ display: "flex", gap: "10px" }}>
-        <button style={{ fontSize: "20px" }} onClick={updateData}>
+        <button style={{ fontSize: "20px" }} onClick={handleUpdateData}>
           Update Data
         </button>
-        <button style={{ fontSize: "20px" }} onClick={verifyData}>
+        <button style={{ fontSize: "20px" }} onClick={handleVerifyData}>
           Verify Data
         </button>
+        <button style={{ fontSize: "20px" }} onClick={handleRestoreBackup}>
+          Restore Backup
+        </button>
+        <button style={{ fontSize: "20px" }} onClick={handleTamperData}>
+          Tamper Data
+        </button>
       </div>
+
+      {message && (
+        <div style={{ fontSize: "20px", color: "red" }}>{message}</div>
+      )}
     </div>
   );
 }
