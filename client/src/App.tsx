@@ -1,6 +1,12 @@
 import React, { useEffect, useState, useCallback } from "react";
-
-const API_URL = "http://localhost:8080";
+import {
+  fetchPublicKey,
+  fetchData,
+  updateData,
+  tamperData,
+} from "./utils/api.ts";
+import { verifyData } from "./utils/crypto.ts";
+import { storeBackup, getBackup } from "./utils/storage.ts";
 
 function App() {
   const [data, setData] = useState<string>("");
@@ -9,133 +15,69 @@ function App() {
   const [message, setMessage] = useState<string>("");
 
   useEffect(() => {
-    fetchPublicKey();
-    getData();
+    const initialize = async () => {
+      const publicKey = await fetchPublicKey();
+      setPublicKey(publicKey);
+
+      const { data, signature } = await fetchData();
+      setData(data);
+      setSignature(signature);
+
+      if (!getBackup()) {
+        storeBackup(data, signature);
+      }
+    };
+
+    initialize();
   }, []);
 
-  // Fetch the public key from the backend
-  const fetchPublicKey = async () => {
-    const response = await fetch(`${API_URL}/publicKey`);
-    const { publicKey } = await response.json();
-    setPublicKey(publicKey);
-  };
-
-  // Fetch data and its signature from the backend
-  const getData = async () => {
-    const response = await fetch(`${API_URL}/data`);
-    const { data, signature } = await response.json();
-    setData(data);
-    setSignature(signature);
-    if (!localStorage.getItem("backupData")) {
-      localStorage.setItem("backupData", JSON.stringify({ data, signature }));
-    }
-  };
-
-  const updateData = useCallback(async () => {
-    // Store data and signature in localStorage as backup
-    localStorage.setItem("backupData", JSON.stringify({ data, signature }));
-
-    await fetch(`${API_URL}/data`, {
-      method: "POST",
-      body: JSON.stringify({ data }),
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-    });
-
-    await getData();
+  const handleUpdateData = useCallback(async () => {
+    storeBackup(data, signature);
+    await updateData(data);
+    const { data: newData, signature: newSignature } = await fetchData();
+    setData(newData);
+    setSignature(newSignature);
   }, [data, signature]);
 
-  const tamperData = async () => {
-    await fetch(`${API_URL}/data`, {
-      method: "PUT",
-      body: JSON.stringify({ data }),
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-    });
-
-    await getData(); // Refresh the data after tampering
+  const handleTamperData = async () => {
+    await tamperData(data);
+    const { data: newData, signature: newSignature } = await fetchData();
+    setData(newData);
+    setSignature(newSignature);
     setMessage("Data tampered successfully. Try verifying it!");
   };
 
-  const cleanAndDecodeBase64 = (base64: string) => {
-    const cleaned = base64
-      .replace(/-----BEGIN PUBLIC KEY-----/, "")
-      .replace(/-----END PUBLIC KEY-----/, "")
-      .replace(/\s+/g, "");
-
-    const padding = cleaned.length % 4;
-    const padded = padding ? cleaned + "=".repeat(4 - padding) : cleaned;
-
-    const binaryString = atob(padded);
-    return Uint8Array.from(binaryString, (c) => c.charCodeAt(0));
-  };
-
-  // Verify the integrity of the data using the public key
-  const verifyData = useCallback(async () => {
-    if (!publicKey || !data || !signature) {
-      setMessage("No data or signature to verify.");
-      return;
-    }
-
+  const handleVerifyData = useCallback(async () => {
     try {
-      // Clean and decode the public key
-      const publicKeyArrayBuffer = cleanAndDecodeBase64(publicKey);
-
-      // Import the public key
-      const importedPublicKey = await window.crypto.subtle.importKey(
-        "spki", // Format of the public key
-        publicKeyArrayBuffer, // Public key as ArrayBuffer
-        { name: "RSASSA-PKCS1-v1_5", hash: { name: "SHA-256" } }, // Algorithm details
-        true, // Whether the key is extractable
-        ["verify"] // Key usage
+      const isVerified = await verifyData(publicKey, data, signature);
+      setMessage(
+        isVerified
+          ? "Data is intact and verified."
+          : "Data has been tampered with!"
       );
-
-      // Convert data to ArrayBuffer
-      const encoder = new TextEncoder();
-      const dataBuffer = encoder.encode(data);
-
-      // Clean and decode the signature
-      const signatureArrayBuffer = cleanAndDecodeBase64(signature);
-      console.log({ signature });
-      // Verify the signature
-      const isVerified = await window.crypto.subtle.verify(
-        { name: "RSASSA-PKCS1-v1_5" }, // Algorithm
-        importedPublicKey, // Public key
-        signatureArrayBuffer, // Signature
-        dataBuffer // Data
-      );
-
-      if (isVerified) {
-        setMessage("Data is intact and verified.");
-      } else {
-        setMessage("Data has been tampered with!");
-      }
     } catch (error) {
-      console.error("Error verifying data:", error);
       setMessage("Error verifying data.");
     }
   }, [publicKey, data, signature]);
 
-  // Restore data from localStorage backup
-  const restoreBackup = async () => {
-    const backup = localStorage.getItem("backupData");
+  const handleRestoreBackup = async () => {
+    const backup = getBackup();
     if (backup) {
-      const { data: backupData, signature: backupSignature } =
-        JSON.parse(backup);
-      console.log({ backupSignature });
+      const { data: backupData } = backup;
 
-      // Update the frontend state with the restored data and signature
-      setData(backupData);
-      setSignature(backupSignature);
+      await updateData(backupData);
+
+      const { data: newData, signature: newSignature } = await fetchData();
+
+      setData(newData);
+      setSignature(newSignature);
+
+      storeBackup(newData, newSignature);
+
       setMessage("Data restored from backup.");
     } else {
       setMessage("No backup found.");
     }
-    await updateData();
   };
 
   return (
@@ -162,16 +104,16 @@ function App() {
       />
 
       <div style={{ display: "flex", gap: "10px" }}>
-        <button style={{ fontSize: "20px" }} onClick={updateData}>
+        <button style={{ fontSize: "20px" }} onClick={handleUpdateData}>
           Update Data
         </button>
-        <button style={{ fontSize: "20px" }} onClick={verifyData}>
+        <button style={{ fontSize: "20px" }} onClick={handleVerifyData}>
           Verify Data
         </button>
-        <button style={{ fontSize: "20px" }} onClick={restoreBackup}>
+        <button style={{ fontSize: "20px" }} onClick={handleRestoreBackup}>
           Restore Backup
         </button>
-        <button style={{ fontSize: "20px" }} onClick={tamperData}>
+        <button style={{ fontSize: "20px" }} onClick={handleTamperData}>
           Tamper Data
         </button>
       </div>
